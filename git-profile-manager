@@ -2,6 +2,35 @@
 
 set -e
 
+# Self update
+if [[ "$1" == "--update" ]]; then
+
+    SCRIPT_URL="https://raw.githubusercontent.com/rahulprgrmr/git-profile-manager/main/git-profile-manager"
+    INSTALL_PATH="$HOME/.local/bin/git-profile-manager"
+
+    echo "Checking for updates..."
+
+    if ! command -v curl >/dev/null; then
+        echo "curl is required to update git-profile-manager."
+        exit 1
+    fi
+
+    TMP_FILE="$(mktemp)"
+
+    echo "Downloading latest version..."
+    curl -fsSL "$SCRIPT_URL" -o "$TMP_FILE"
+
+    chmod +x "$TMP_FILE"
+
+    mv "$TMP_FILE" "$INSTALL_PATH"
+
+    echo
+    echo "git-profile-manager updated successfully!"
+    echo
+
+    exit 0
+fi
+
 CONFIG_DIR="$HOME"
 GLOBAL_GITCONFIG="$HOME/.gitconfig"
 

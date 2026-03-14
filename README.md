@@ -20,6 +20,7 @@ The tool uses Git's **`includeIf` conditional configuration** and provides a cle
 * Remove paths from a profile
 * Delete profiles cleanly
 * Automatically creates missing directories
+* **Self-update support** using `git-profile-manager --update`
 
 ---
 
@@ -101,9 +102,10 @@ curl -fsSL https://raw.githubusercontent.com/rahulprgrmr/git-profile-manager/mai
 
 This will:
 
-* install `git-profile-manager`
+* download the latest version of `git-profile-manager`
 * install required dependencies
 * place the executable in `~/.local/bin`
+* ensure `~/.local/bin` is available in your `PATH`
 
 ---
 
@@ -145,6 +147,20 @@ Remove Path from Profile
 Delete Profile
 Exit
 ```
+
+---
+
+# Updating the Tool
+
+The tool supports **self-updating**.
+
+To upgrade to the latest version:
+
+```bash
+git-profile-manager --update
+```
+
+This command downloads the latest script from GitHub and replaces the installed version.
 
 ---
 
