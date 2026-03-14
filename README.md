@@ -96,7 +96,7 @@ Currently the installer supports **Arch Linux**.
 Run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<user>/<repo>/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rahulprgrmr/git-profile-manager/main/install.sh | bash
 ```
 
 This will:
