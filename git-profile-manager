@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+
+set -e
+
+CONFIG_DIR="$HOME"
+GLOBAL_GITCONFIG="$HOME/.gitconfig"
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "Error: $1 is required."
+            exit 1
+    }
+}
+
+require_cmd gum
+require_cmd fzf
+require_cmd ssh-keygen
+
+copy_to_clipboard() {
+    if command -v wl-copy >/dev/null; then
+        wl-copy
+    elif command -v xclip >/dev/null; then
+        xclip -selection clipboard
+    else
+        cat
+    fi
+}
+
+copy_pubkey_to_clipboard() {
+    key_path="$1"
+
+    if [[ ! -f "$key_path.pub" ]]; then
+        gum style --foreground 196 "Public key not found: $key_path.pub"
+        return
+    fi
+
+    cat "$key_path.pub" | copy_to_clipboard
+
+    gum style \
+        --border rounded \
+        --padding "1 2" \
+        --foreground 212 \
+        "Public key copied to clipboard.
+    Add it to your Git provider now."
+
+    gum confirm "Press Enter after adding the key."
+}
+
+ensure_global_gitconfig() {
+
+    [[ -f "$GLOBAL_GITCONFIG" ]] || touch "$GLOBAL_GITCONFIG"
+
+    git config --global init.defaultBranch main
+    git config --global core.excludesfile ~/.gitignore
+    git config --global pull.rebase false
+}
+
+generate_ssh_key() {
+    email="$1"
+
+    key_name=$(gum input --placeholder "SSH key filename (eg: github_personal)")
+    key_path="$HOME/.ssh/$key_name"
+
+    # hide ssh-keygen output from stdout
+    ssh-keygen -t ed25519 -C "$email" -f "$key_path" >&2
+
+    echo "$key_path"
+}
+
+select_existing_key() {
+    find "$HOME/.ssh" -type f -name "*.pub" \
+        | sed 's/.pub$//' \
+        | sed "s|$HOME/.ssh/||" \
+        | fzf \
+        | sed "s|^|$HOME/.ssh/|"
+}
+
+add_git_profile() {
+
+    ensure_global_gitconfig
+
+    profile=$(gum input --placeholder "Profile name (personal, company etc)")
+    name=$(gum input --placeholder "Name")
+    email=$(gum input --placeholder "Email")
+    username=$(gum input --placeholder "Git provider username")
+
+    key_option=$(gum choose "Generate new SSH key" "Use existing SSH key")
+
+    if [[ "$key_option" == "Generate new SSH key" ]]; then
+        key_path=$(generate_ssh_key "$email")
+    else
+        key_path=$(select_existing_key)
+    fi
+
+    copy_pubkey_to_clipboard "$key_path"
+
+    config_file="$HOME/.gitconfig.$profile"
+
+    cat > "$config_file" <<EOF
+[user]
+email = $email
+name = $name
+
+[github]
+user = "$username"
+
+[core]
+sshCommand = "ssh -i $key_path -o IdentitiesOnly=yes"
+EOF
+
+paths=()
+
+while true; do
+    if [[ ${#paths[@]} -gt 0 ]]; then
+        echo
+        gum style --foreground 212 "Added repo parent paths:"
+        for path in "${paths[@]}"; do
+            echo "  • ${path/#$HOME/\~}"
+        done
+        echo
+    fi
+
+    p=$(gum input --placeholder "Enter repo parent path (blank to finish)")
+    [[ -z "$p" ]] && break
+
+    # expand ~ to HOME
+    expanded_path=$(eval echo "$p")
+
+    mkdir -p "$expanded_path"
+    paths+=("$expanded_path")
+done
+
+for path in "${paths[@]}"; do
+    git_path=${path/#$HOME/\~}
+
+    echo "" >> "$GLOBAL_GITCONFIG"
+    echo "[includeIf \"gitdir:$git_path/**\"]" >> "$GLOBAL_GITCONFIG"
+    echo "path = $config_file" >> "$GLOBAL_GITCONFIG"
+done
+
+gum style --foreground 42 "Profile created successfully."
+}
+
+list_profiles() {
+
+    profiles=$(ls ~/.gitconfig.* 2>/dev/null | sed 's/.*\.gitconfig\.//')
+
+    selected=$(echo "$profiles" | fzf)
+
+    [[ -z "$selected" ]] && return
+
+    gum style --border rounded --padding "1 2" "$(cat ~/.gitconfig.$selected)"
+
+    echo
+    echo "Paths configured in ~/.gitconfig:"
+    grep -B1 ".gitconfig.$selected" "$GLOBAL_GITCONFIG" || true
+}
+
+add_path_to_profile() {
+
+    profiles=$(ls ~/.gitconfig.* 2>/dev/null | sed 's/.*\.gitconfig\.//')
+
+    profile=$(echo "$profiles" | fzf)
+
+    path=$(gum input --placeholder "New path")
+
+    mkdir -p "$path"
+
+    echo "" >> "$GLOBAL_GITCONFIG"
+    echo "[includeIf \"gitdir:$path/**\"]" >> "$GLOBAL_GITCONFIG"
+    echo "path = ~/.gitconfig.$profile" >> "$GLOBAL_GITCONFIG"
+
+    gum style --foreground 42 "Path added."
+}
+
+remove_path_from_profile() {
+
+    profiles=$(ls ~/.gitconfig.* 2>/dev/null | sed 's/.*\.gitconfig\.//')
+
+    profile=$(echo "$profiles" | fzf --prompt="Select profile > ")
+
+    [[ -z "$profile" ]] && return
+
+    config_file="$HOME/.gitconfig.$profile"
+
+    mapfile -t paths < <(
+        awk -v cfg="$config_file" '
+        /^\[includeIf / { inc=$0 }
+        /^path = / {
+            if ($3 == cfg) {
+                gsub(/\[includeIf "gitdir:/,"",inc)
+                gsub(/\/\*\*"\]/,"",inc)
+                print inc
+}
+}
+' "$GLOBAL_GITCONFIG"
+)
+
+if [[ ${#paths[@]} -eq 0 ]]; then
+    gum style --foreground 196 "No paths found for profile."
+    return
+fi
+
+selected=$(printf "%s\n" "${paths[@]}" | gum choose --header "Select path to remove")
+
+[[ -z "$selected" ]] && return
+
+escaped=$(printf '%s\n' "$selected" | sed 's/[.[\*^$]/\\&/g')
+
+tmpfile=$(mktemp)
+
+awk -v path="$selected" '
+BEGIN { remove=0 }
+
+$0 ~ "\\[includeIf \"gitdir:" path "/\\*\\*\"\\]" {
+    remove=1
+    next
+}
+
+remove==1 && /^path = / {
+    remove=0
+    next
+}
+
+{
+    print
+}
+' "$GLOBAL_GITCONFIG" > "$tmpfile"
+
+mv "$tmpfile" "$GLOBAL_GITCONFIG"
+
+gum style --foreground 196 "Path removed from profile."
+}
+
+delete_profile() {
+
+    profiles=$(ls ~/.gitconfig.* 2>/dev/null | sed 's/.*\.gitconfig\.//')
+
+    profile=$(echo "$profiles" | fzf)
+
+    gum confirm "Delete profile $profile?" || return
+
+    rm "$HOME/.gitconfig.$profile"
+
+    sed -i "/\[includeIf.*gitdir:.*\]/{
+        N
+        /path = .*\.gitconfig\.$profile/d
+    }" "$GLOBAL_GITCONFIG"
+
+gum style --foreground 196 "Profile deleted."
+}
+
+main_menu() {
+
+    while true; do
+
+        choice=$(gum choose \
+            "Add Git Profile" \
+            "List Profiles" \
+            "Add Path to Profile" \
+            "Remove Path from Profile" \
+            "Delete Profile" \
+            "Exit")
+
+        case "$choice" in
+            "Add Git Profile") add_git_profile ;;
+            "List Profiles") list_profiles ;;
+            "Add Path to Profile") add_path_to_profile ;;
+            "Remove Path from Profile") remove_path_from_profile ;;
+            "Delete Profile") delete_profile ;;
+            "Exit") exit 0 ;;
+        esac
+
+    done
+}
+
+main_menu
